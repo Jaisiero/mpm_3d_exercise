@@ -87,9 +87,10 @@ def substep(gravity: float):
             for i, j, k in ti.static(ti.ndrange(dim, dim, dim)):
                 offset = ti.Vector([i, j, k])
                 dpos = (offset.cast(float) - fx) * dx
+                pos = base + offset
                 weight = w[i][0] * w[j][1] * w[k][2]
-                grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
-                grid_m[base + offset] += weight * p_mass
+                grid_v[pos] += weight * (p_mass * v[p] + affine @ dpos)
+                grid_m[pos] += weight * p_mass
     for I in ti.grouped(grid_m):
         if grid_m[I] > 0:  # No need for epsilon here
             grid_v[I] = \
@@ -116,8 +117,10 @@ def substep(gravity: float):
             new_C = ti.Matrix.zero(float, dim, dim)
             for i, j, k in ti.static(ti.ndrange(dim, dim, dim)):
                 # loop over 3x3x3 grid node neighborhood
-                dpos = ti.Vector([i, j, k]).cast(float) - fx
-                g_v = grid_v[base + ti.Vector([i, j, k])]
+                offset = ti.Vector([i, j, k])
+                dpos = (offset.cast(float) - fx)
+                pos = base + offset
+                g_v = grid_v[pos]
                 weight = w[i][0] * w[j][1] * w[k][2]
                 new_v += weight * g_v
                 new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
