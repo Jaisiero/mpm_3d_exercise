@@ -4,6 +4,8 @@ https://taichi.graphics/
 
 https://github.com/Jaisiero/mpm_3d_exercise/assets/6051981/4f854322-97e3-40c8-befe-d1849b580128
 
+![Water + Jelly + Snow](https://github.com/Jaisiero/mpm_3d_exercise/assets/6051981/bd31792e-6104-4f66-8fe8-39b777a74710)
+
 
 ## Installation
 Make sure your `pip` is up-to-date:
