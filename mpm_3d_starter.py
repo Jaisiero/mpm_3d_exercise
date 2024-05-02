@@ -54,37 +54,36 @@ def substep(gravity: float):
             # Quadratic kernels  [http://mpm.graphics   Eqn. 123, with x=fx, fx-1,fx-2]
             w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1)**2, 0.5 * (fx - 0.5)**2]
             # F[p]: deformation gradient update
-            # F[p] = (ti.Matrix.identity(float, dim) + dt * C[p]) @ F[p]
-            # # h: Hardening coefficient: snow gets harder when compressed
-            # h = ti.exp(10 * (1.0 - Jp[p]))
-            # if materials[p] == 1:  # jelly, make it softer
-            #     h = 0.3
-            # mu, la = mu_0 * h, lambda_0 * h
-            # if materials[p] == 0:  # liquid
-            #     mu = 0.0
-            # U, sig, V = ti.svd(F[p])
-            # J = 1.0
-            # for d in ti.static(range(dim)):
-            #     new_sig = sig[d, d]
-            #     if materials[p] == 2:  # Snow
-            #         new_sig = ti.min(ti.max(sig[d, d], 1 - 2.5e-2),
-            #                         1 + 4.5e-3)  # Plasticity
-            #     Jp[p] *= sig[d, d] / new_sig
-            #     sig[d, d] = new_sig
-            #     J *= new_sig
-            # if materials[p] == 0:
-            #     # Reset deformation gradient to avoid numerical instability
-            #     # F[p] = ti.Matrix.identity(float, dim) * ti.sqrt(J)
-            #     ...
-            # elif materials[p] == 2:
-            #     # Reconstruct elastic deformation gradient after plasticity
-            #     F[p] = U @ sig @ V.transpose()
-            # stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose(
-            # ) + ti.Matrix.identity(float, dim) * la * J * (J - 1)
-            # stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
-            # affine = stress + p_mass * C[p]
-            stress = -dt * 4 * E * p_vol * (Jp[p] - 1) / dx**2
-            affine = ti.Matrix.identity(float, dim) * stress + p_mass * C[p]
+
+            affine = ti.Matrix.zero(float, dim, dim)
+            if materials[p] != WATER:
+                F[p] = (ti.Matrix.identity(float, dim) + dt * C[p]) @ F[p]
+                # h: Hardening coefficient: snow gets harder when compressed
+                h = ti.exp(10 * (1.0 - Jp[p]))
+                if materials[p] == JELLY:  # jelly, make it softer
+                    h = 0.3
+                mu, la = mu_0 * h, lambda_0 * h
+                U, sig, V = ti.svd(F[p])
+                J = 1.0
+                for d in ti.static(range(dim)):
+                    new_sig = sig[d, d]
+                    if materials[p] == SNOW:  # Snow
+                        new_sig = ti.min(ti.max(sig[d, d], 1 - 2.5e-2),
+                                        1 + 4.5e-3)  # Plasticity
+                    Jp[p] *= sig[d, d] / new_sig
+                    sig[d, d] = new_sig
+                    J *= new_sig
+                if materials[p] == SNOW:
+                    # Reconstruct elastic deformation gradient after plasticity
+                    F[p] = U @ sig @ V.transpose()
+                stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose(
+                ) + ti.Matrix.identity(float, dim) * la * J * (J - 1)
+                stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
+                affine = stress + p_mass * C[p]
+            else:
+                stress = -dt * 4 * E * p_vol * (Jp[p] - 1) * inv_dx * inv_dx
+                affine = ti.Matrix.identity(float, dim) * stress + p_mass * C[p]
+
             # Loop over 3x3x3 grid node neighborhood
             for i, j, k in ti.static(ti.ndrange(dim, dim, dim)):
                 offset = ti.Vector([i, j, k])
