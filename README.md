@@ -2,9 +2,7 @@
 The starter code for a 3D material point method simulation demo written in Taichi. This would be a good exercise for you to get used to **continuum simulations**.
 
 
-
-https://user-images.githubusercontent.com/2309174/202906099-92c06d35-2e24-4be1-8adb-1354764d74bf.mp4
-
+https://github.com/Jaisiero/mpm_3d_exercise/assets/6051981/4f854322-97e3-40c8-befe-d1849b580128
 
 
 > To implement your own version, click the "Use this template" button on this page and simply modify the `mpm_3d_starter.py` script.
