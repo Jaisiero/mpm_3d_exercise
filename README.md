@@ -1,13 +1,9 @@
 # MPM 3D
-The starter code for a 3D material point method simulation demo written in Taichi. This would be a good exercise for you to get used to **continuum simulations**.
+This particle simulator is based on taichi software:
+https://taichi.graphics/
 
+https://github.com/Jaisiero/mpm_3d_exercise/assets/6051981/4f854322-97e3-40c8-befe-d1849b580128
 
-
-https://user-images.githubusercontent.com/2309174/202906099-92c06d35-2e24-4be1-8adb-1354764d74bf.mp4
-
-
-
-> To implement your own version, click the "Use this template" button on this page and simply modify the `mpm_3d_starter.py` script.
 
 ## Installation
 Make sure your `pip` is up-to-date:
@@ -27,9 +23,6 @@ To run the demo:
 ```bash
 $ python mpm_3d_starter.py
 ```
-
-## TODOs
-The main simulation step `substep` function is intentionally left blank. You shall fill it in with proper code include the P2G, GridOp, and G2P steps. A 2D reference implementation is provided at `mpm99.py`.
 
 
 ## Extra credits are for the extras
