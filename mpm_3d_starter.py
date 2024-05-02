@@ -5,7 +5,7 @@ ti.init(arch=ti.gpu) # you may want to change the arch to ti.vulkan manually if 
 
 # simulation/discretization constants
 dim = 3
-quality = 2  # Use a larger value for higher-res simulations
+quality = 4  # Use a larger value for higher-res simulations
 n_particles, n_grid = 8192 * quality**dim, 32 * quality
 dt = 1e-4
 dx = 1.0 / n_grid
@@ -54,35 +54,37 @@ def substep(gravity: float):
             # Quadratic kernels  [http://mpm.graphics   Eqn. 123, with x=fx, fx-1,fx-2]
             w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1)**2, 0.5 * (fx - 0.5)**2]
             # F[p]: deformation gradient update
-            F[p] = (ti.Matrix.identity(float, dim) + dt * C[p]) @ F[p]
-            # h: Hardening coefficient: snow gets harder when compressed
-            h = ti.exp(10 * (1.0 - Jp[p]))
-            if materials[p] == 1:  # jelly, make it softer
-                h = 0.3
-            mu, la = mu_0 * h, lambda_0 * h
-            if materials[p] == 0:  # liquid
-                mu = 0.0
-            U, sig, V = ti.svd(F[p])
-            J = 1.0
-            for d in ti.static(range(dim)):
-                new_sig = sig[d, d]
-                if materials[p] == 2:  # Snow
-                    new_sig = ti.min(ti.max(sig[d, d], 1 - 2.5e-2),
-                                    1 + 4.5e-3)  # Plasticity
-                Jp[p] *= sig[d, d] / new_sig
-                sig[d, d] = new_sig
-                J *= new_sig
-            if materials[p] == 0:
-                # Reset deformation gradient to avoid numerical instability
-                # F[p] = ti.Matrix.identity(float, dim) * ti.sqrt(J)
-                ...
-            elif materials[p] == 2:
-                # Reconstruct elastic deformation gradient after plasticity
-                F[p] = U @ sig @ V.transpose()
-            stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose(
-            ) + ti.Matrix.identity(float, dim) * la * J * (J - 1)
-            stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
-            affine = stress + p_mass * C[p]
+            # F[p] = (ti.Matrix.identity(float, dim) + dt * C[p]) @ F[p]
+            # # h: Hardening coefficient: snow gets harder when compressed
+            # h = ti.exp(10 * (1.0 - Jp[p]))
+            # if materials[p] == 1:  # jelly, make it softer
+            #     h = 0.3
+            # mu, la = mu_0 * h, lambda_0 * h
+            # if materials[p] == 0:  # liquid
+            #     mu = 0.0
+            # U, sig, V = ti.svd(F[p])
+            # J = 1.0
+            # for d in ti.static(range(dim)):
+            #     new_sig = sig[d, d]
+            #     if materials[p] == 2:  # Snow
+            #         new_sig = ti.min(ti.max(sig[d, d], 1 - 2.5e-2),
+            #                         1 + 4.5e-3)  # Plasticity
+            #     Jp[p] *= sig[d, d] / new_sig
+            #     sig[d, d] = new_sig
+            #     J *= new_sig
+            # if materials[p] == 0:
+            #     # Reset deformation gradient to avoid numerical instability
+            #     # F[p] = ti.Matrix.identity(float, dim) * ti.sqrt(J)
+            #     ...
+            # elif materials[p] == 2:
+            #     # Reconstruct elastic deformation gradient after plasticity
+            #     F[p] = U @ sig @ V.transpose()
+            # stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose(
+            # ) + ti.Matrix.identity(float, dim) * la * J * (J - 1)
+            # stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
+            # affine = stress + p_mass * C[p]
+            stress = -dt * 4 * E * p_vol * (Jp[p] - 1) / dx**2
+            affine = ti.Matrix.identity(float, dim) * stress + p_mass * C[p]
             # Loop over 3x3x3 grid node neighborhood
             for i, j, k in ti.static(ti.ndrange(dim, dim, dim)):
                 offset = ti.Vector([i, j, k])
@@ -126,6 +128,7 @@ def substep(gravity: float):
                 new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
             v[p], C[p] = new_v, new_C
             x[p] += dt * v[p]  # advection
+            Jp[p] *= 1 + dt * C[p].trace()
 
 
 # region is recognizable in vscode and pycharm at least...
