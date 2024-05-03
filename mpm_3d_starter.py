@@ -5,20 +5,26 @@ ti.init(arch=ti.gpu) # you may want to change the arch to ti.vulkan manually if 
 
 # simulation/discretization constants
 dim = 3
-quality = 4  # Use a larger value for higher-res simulations
+quality = 1  # Use a larger value for higher-res simulations
 n_particles, n_grid = 8192 * quality**dim, 32 * quality
 dt = 1e-4
 dx = 1.0 / n_grid
 inv_dx = 1.0 / dx
 p_vol, p_rho = (dx * 0.5)**2, 1
 p_mass = p_vol * p_rho
-E, nu = 0.1e4, 0.2  # Young's modulus and Poisson's ratio
-mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / (
-    (1 + nu) * (1 - 2 * nu))  # Lame parameters
+# E, nu = 0.1e4, 0.2  # Young's modulus and Poisson's ratio
+# mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / (
+#     (1 + nu) * (1 - 2 * nu))  # Lame parameters
 bound = 3  # boundary thickness
 
 # physics related constants
 gravity = -9.8
+# fuild parameters
+rest_density = 4.0
+dynamic_viscosity = 0.1
+# equation of state parameters
+eos_stiffness = 10.0
+eos_power = 4
 
 # for simulation
 x = ti.Vector.field(dim, float, n_particles)  # position
@@ -55,34 +61,7 @@ def substep(gravity: float):
             w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1)**2, 0.5 * (fx - 0.5)**2]
             # F[p]: deformation gradient update
 
-            affine = ti.Matrix.zero(float, dim, dim)
-            if materials[p] != WATER:
-                F[p] = (ti.Matrix.identity(float, dim) + dt * C[p]) @ F[p]
-                # h: Hardening coefficient: snow gets harder when compressed
-                h = ti.exp(10 * (1.0 - Jp[p]))
-                if materials[p] == JELLY:  # jelly, make it softer
-                    h = 0.3
-                mu, la = mu_0 * h, lambda_0 * h
-                U, sig, V = ti.svd(F[p])
-                J = 1.0
-                for d in ti.static(range(dim)):
-                    new_sig = sig[d, d]
-                    if materials[p] == SNOW:  # Snow
-                        new_sig = ti.min(ti.max(sig[d, d], 1 - 2.5e-2),
-                                        1 + 4.5e-3)  # Plasticity
-                    Jp[p] *= sig[d, d] / new_sig
-                    sig[d, d] = new_sig
-                    J *= new_sig
-                if materials[p] == SNOW:
-                    # Reconstruct elastic deformation gradient after plasticity
-                    F[p] = U @ sig @ V.transpose()
-                stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose(
-                ) + ti.Matrix.identity(float, dim) * la * J * (J - 1)
-                stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
-                affine = stress + p_mass * C[p]
-            else:
-                stress = -dt * 4 * E * p_vol * (Jp[p] - 1) * inv_dx * inv_dx
-                affine = ti.Matrix.identity(float, dim) * stress + p_mass * C[p]
+            affine = p_mass * C[p]
 
             # Loop over 3x3x3 grid node neighborhood
             for i, j, k in ti.static(ti.ndrange(dim, dim, dim)):
@@ -92,6 +71,61 @@ def substep(gravity: float):
                 weight = w[i][0] * w[j][1] * w[k][2]
                 grid_v[pos] += weight * (p_mass * v[p] + affine @ dpos)
                 grid_m[pos] += weight * p_mass
+    for p in x:
+        if is_used[p]:  # LOOKATME: do not swap the branch stmt with the for-loop, because ONLY the outermost loop stmt can be parallized.
+            base = (x[p] * inv_dx - 0.5).cast(int)
+            fx = x[p] * inv_dx - base.cast(float)
+            # Quadratic kernels  [http://mpm.graphics   Eqn. 123, with x=fx, fx-1,fx-2]
+            w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1)**2, 0.5 * (fx - 0.5)**2]
+
+            # estimating particle volume by summing up neighbourhood's weighted mass contribution
+            # MPM course, equation 152 
+            density = 0.0
+
+            # Loop over 3x3x3 grid node neighborhood
+            for i, j, k in ti.static(ti.ndrange(dim, dim, dim)):
+                offset = ti.Vector([i, j, k])
+                dpos = (offset.cast(float) - fx) * dx
+                pos = base + offset
+                weight = w[i][0] * w[j][1] * w[k][2]
+                density += weight * grid_m[pos]
+
+            volume = p_mass / density
+
+            # Tait equation of state. i clamped it as a bit of a hack.
+            # clamping helps prevent particles absorbing into each other with negative pressures
+            pressure = max(-0.1, eos_stiffness * (pow(density / rest_density, eos_power) - 1))
+            
+            stress = ti.Matrix([[-pressure, 0, 0], [0, -pressure, 0], [0, 0, -pressure]])
+
+            strain = C[p]
+            
+            # velocity gradient - CPIC eq. 17, where deriv of quadratic polynomial is linear
+
+            trace = strain.trace()
+            strain[0,1] = strain[1,0] = trace
+            strain[0,2] = strain[2,0] = trace
+            strain[1,2] = strain[2,1] = trace
+            
+
+            # update stress with new velocity gradient
+            viscosity_term = dynamic_viscosity * strain
+            stress += viscosity_term
+
+            eq_16_term_0 = -dt * 4 * volume * stress * inv_dx
+
+            # Loop over 3x3x3 grid node neighborhood
+            for i, j, k in ti.static(ti.ndrange(dim, dim, dim)):
+                offset = ti.Vector([i, j, k])
+                dpos = (offset.cast(float) - fx) * dx
+                pos = base + offset
+                weight = w[i][0] * w[j][1] * w[k][2]
+
+                # fused force + momentum contribution from MLS-MPM
+                momentum = (weight * eq_16_term_0 @ dpos)
+                grid_v[pos] += momentum
+
+
     for I in ti.grouped(grid_m):
         if grid_m[I] > 0:  # No need for epsilon here
             grid_v[I] = \
@@ -124,10 +158,12 @@ def substep(gravity: float):
                 g_v = grid_v[pos]
                 weight = w[i][0] * w[j][1] * w[k][2]
                 new_v += weight * g_v
-                new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
-            v[p], C[p] = new_v, new_C
+                new_C += weight * g_v.outer_product(dpos)
+
+            new_C *= 4.0
+
+            v[p], C[p] = new_v, new_C # advection and APIC
             x[p] += dt * v[p]  # advection
-            Jp[p] *= 1 + dt * C[p].trace()
 
 
 # region is recognizable in vscode and pycharm at least...
