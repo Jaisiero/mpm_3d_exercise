@@ -43,10 +43,13 @@ SNOW = 2
 
 
 @ti.kernel
-def substep(gravity: float):
+def substep_zero_out():
     for i, j, k in grid_m:
         grid_v[i, j, k] = [0, 0, 0]
         grid_m[i, j, k] = 0
+
+@ti.kernel
+def substep_p2g():
     for p in x:
         if is_used[p]:  # LOOKATME: do not swap the branch stmt with the for-loop, because ONLY the outermost loop stmt can be parallized.
             base = (x[p] * inv_dx - 0.5).cast(int)
@@ -92,11 +95,14 @@ def substep(gravity: float):
                 weight = w[i][0] * w[j][1] * w[k][2]
                 grid_v[pos] += weight * (p_mass * v[p] + affine @ dpos)
                 grid_m[pos] += weight * p_mass
+
+@ti.kernel
+def substep_grid(gravity: float):
     for I in ti.grouped(grid_m):
         if grid_m[I] > 0:  # No need for epsilon here
             grid_v[I] = \
                 (1 / grid_m[I]) * grid_v[I]  # Momentum to velocity
-            grid_v[I][1] -= dt * 50  # gravity
+            grid_v[I][1] += dt * gravity  # gravity
             if I[0] < bound and grid_v[I][0] < 0:
                 grid_v[I][0] = 0
             if I[0] > n_grid - bound and grid_v[I][0] > 0:
@@ -109,6 +115,9 @@ def substep(gravity: float):
                 grid_v[I][2] = 0
             if I[2] > n_grid - bound and grid_v[I][2] > 0:
                 grid_v[I][2] = 0
+
+@ti.kernel
+def substep_g2p():
     for p in x:
         if is_used[p]:
             base = (x[p] * inv_dx - 0.5).cast(int)
@@ -253,7 +262,7 @@ def show_options():
             paused = True
 
     with gui.sub_window("Gravity", 0.05, 0.3, 0.2, 0.1) as w:
-        gravity = w.slider_float("y", gravity, -10, 10)
+        gravity = w.slider_float("y", gravity, -50, 50)
 
     with gui.sub_window("Options", 0.05, 0.45, 0.2, 0.4) as w:
         use_random_colors = w.checkbox("use_random_colors", use_random_colors)
@@ -317,7 +326,10 @@ def main():
         frame_id = frame_id % 256
 
         if not paused:
-            substep(gravity)
+            substep_zero_out()
+            substep_p2g()
+            substep_grid(gravity)
+            substep_g2p()
 
         render()
         show_options()
