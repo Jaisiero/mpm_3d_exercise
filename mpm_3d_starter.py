@@ -16,6 +16,7 @@ E, nu = 0.1e4, 0.2  # Young's modulus and Poisson's ratio
 mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / (
     (1 + nu) * (1 - 2 * nu))  # Lame parameters
 bound = 3  # boundary thickness
+steps = 15  # simulation steps
 
 # physics related constants
 gravity = -9.8
@@ -326,10 +327,11 @@ def main():
         frame_id = frame_id % 256
 
         if not paused:
-            substep_zero_out()
-            substep_p2g()
-            substep_grid(gravity)
-            substep_g2p()
+            for s in range(steps):
+                substep_zero_out()
+                substep_p2g()
+                substep_grid(gravity)
+                substep_g2p()
 
         render()
         show_options()
