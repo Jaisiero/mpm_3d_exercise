@@ -7,7 +7,7 @@ ti.init(arch=ti.gpu) # you may want to change the arch to ti.vulkan manually if 
 dim = 3
 quality = 1  # Use a larger value for higher-res simulations
 n_particles, n_grid = 8192 * quality**dim, 32 * quality
-dt = 1e-4
+dt = 1e-2
 dx = 1.0 / n_grid
 inv_dx = 1.0 / dx
 p_vol, p_rho = (dx * 0.5)**2, 1
@@ -54,7 +54,7 @@ def substep(gravity: float):
         grid_v[i, j, k] = [0, 0, 0]
         grid_m[i, j, k] = 0
     for p in x:
-        if is_used[p]:  # LOOKATME: do not swap the branch stmt with the for-loop, because ONLY the outermost loop stmt can be parallized.
+        if is_used[p]:  
             base = (x[p] * inv_dx - 0.5).cast(int)
             fx = x[p] * inv_dx - base.cast(float)
             # Quadratic kernels  [http://mpm.graphics   Eqn. 123, with x=fx, fx-1,fx-2]
@@ -72,7 +72,7 @@ def substep(gravity: float):
                 grid_v[pos] += weight * (p_mass * v[p] + affine @ dpos)
                 grid_m[pos] += weight * p_mass
     for p in x:
-        if is_used[p]:  # LOOKATME: do not swap the branch stmt with the for-loop, because ONLY the outermost loop stmt can be parallized.
+        if is_used[p]:  
             base = (x[p] * inv_dx - 0.5).cast(int)
             fx = x[p] * inv_dx - base.cast(float)
             # Quadratic kernels  [http://mpm.graphics   Eqn. 123, with x=fx, fx-1,fx-2]
@@ -85,7 +85,6 @@ def substep(gravity: float):
             # Loop over 3x3x3 grid node neighborhood
             for i, j, k in ti.static(ti.ndrange(dim, dim, dim)):
                 offset = ti.Vector([i, j, k])
-                dpos = (offset.cast(float) - fx) * dx
                 pos = base + offset
                 weight = w[i][0] * w[j][1] * w[k][2]
                 density += weight * grid_m[pos]
@@ -101,18 +100,14 @@ def substep(gravity: float):
             strain = C[p]
             
             # velocity gradient - CPIC eq. 17, where deriv of quadratic polynomial is linear
-
             trace = strain.trace()
-            strain[0,1] = strain[1,0] = trace
-            strain[0,2] = strain[2,0] = trace
-            strain[1,2] = strain[2,1] = trace
-            
+            strain[0,1] = strain[1,0] = strain[0,2] = strain[2,0] = strain[1,2] = strain[2,1] = trace
 
             # update stress with new velocity gradient
             viscosity_term = dynamic_viscosity * strain
             stress += viscosity_term
 
-            eq_16_term_0 = -dt * 4 * volume * stress * inv_dx
+            eq_16_term_0 = -dt * 4 * volume * stress
 
             # Loop over 3x3x3 grid node neighborhood
             for i, j, k in ti.static(ti.ndrange(dim, dim, dim)):
