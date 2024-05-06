@@ -7,7 +7,7 @@ ti.init(arch=ti.gpu)
 # dim, n_grid, steps, dt = 2, 128, 20, 2e-4
 # dim, n_grid, steps, dt = 2, 256, 32, 1e-4
 # dim, n_grid, steps, dt = 3, 32, 25, 4e-4
-dim, n_grid, steps, dt, quality = 3, 64, 1, 1e-4, 4
+dim, n_grid, steps, dt, quality = 3, 128, 25, 0.5e-4, 4
 # dim, n_grid, steps, dt = 3, 128, 5, 1e-4
 
 n_particles = 8192 * quality**dim
@@ -15,9 +15,10 @@ n_particles = 8192 * quality**dim
 print(n_particles)
 
 dx = 1 / n_grid
+inv_dx = 1 / dx
 
 p_rho = 1
-p_rho_2 = 20
+p_rho_2 = 1000
 p_vol = (dx * 0.5) ** 2
 p_mass = p_vol * p_rho
 p_mass_2 = p_vol * p_rho_2
@@ -29,7 +30,7 @@ mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame 
 
 F_x = ti.Vector.field(dim, float, n_particles)
 F_v = ti.Vector.field(dim, float, n_particles)
-F_C = ti.Matrix.field(dim, dim, float, n_particles)
+F_C = ti.Matrix.field(dim, dim, float, n_particles)  # affine velocity field
 F_dg = ti.Matrix.field(3, 3, dtype=float, shape=n_particles)  # deformation gradient
 F_Jp = ti.field(float, n_particles)
 
@@ -47,17 +48,20 @@ JELLY = 1
 SNOW = 2
 RIGID = 3
 
-
 @ti.kernel
-def substep(g_x: float, g_y: float, g_z: float):
+def substep_init_grid():
     for I in ti.grouped(F_grid_m):
         F_grid_v[I] = ti.zero(F_grid_v[I])
         F_grid_m[I] = 0
+
+    
+@ti.kernel
+def substep_p2g():
     ti.loop_config(block_dim=n_grid)
     for p in F_x:
         if F_used[p] == 0:
             continue
-        Xp = F_x[p] / dx
+        Xp = F_x[p] * inv_dx
         base = int(Xp - 0.5)
         fx = Xp - base
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
@@ -74,7 +78,7 @@ def substep(g_x: float, g_y: float, g_z: float):
         if F_materials[p] == JELLY:  # jelly, make it softer
             h = 0.3
         if F_materials[p] == RIGID:  # rigid, make it super hard
-            h = 80.0
+            h = 5000.0
         mu, la = mu_0 * h, lambda_0 * h
         if F_materials[p] == WATER:  # liquid
             mu = 0.0
@@ -96,10 +100,11 @@ def substep(g_x: float, g_y: float, g_z: float):
         elif F_materials[p] == SNOW:
             # Reconstruct elastic deformation gradient after plasticity
             F_dg[p] = U @ sig @ V.transpose()
+        # Fixed Corotated
         stress = 2 * mu * (F_dg[p] - U @ V.transpose()) @ F_dg[p].transpose() + ti.Matrix.identity(
             float, 3
         ) * la * J * (J - 1)
-        stress = (-dt * p_vol * 4) * stress / dx**2
+        stress = (-dt * p_vol * 4) * stress * inv_dx * inv_dx
         affine = stress + _mass * F_C[p]
 
         for offset in ti.static(ti.grouped(ti.ndrange(*neighbour))):
@@ -109,6 +114,9 @@ def substep(g_x: float, g_y: float, g_z: float):
                 weight *= w[offset[i]][i]
             F_grid_v[base + offset] += weight * (_mass * F_v[p] + affine @ dpos)
             F_grid_m[base + offset] += weight * _mass
+
+@ti.kernel
+def substep_grid(g_x: float, g_y: float, g_z: float):
     for I in ti.grouped(F_grid_m):
         if F_grid_m[I] > 0:
             F_grid_v[I] /= F_grid_m[I]
@@ -116,10 +124,13 @@ def substep(g_x: float, g_y: float, g_z: float):
         cond = (I < bound) & (F_grid_v[I] < 0) | (I > n_grid - bound) & (F_grid_v[I] > 0)
         F_grid_v[I] = ti.select(cond, 0, F_grid_v[I])
     ti.loop_config(block_dim=n_grid)
+    
+@ti.kernel
+def substep_g2p():
     for p in F_x:
         if F_used[p] == 0:
             continue
-        Xp = F_x[p] / dx
+        Xp = F_x[p] * inv_dx
         base = int(Xp - 0.5)
         fx = Xp - base
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
@@ -132,7 +143,7 @@ def substep(g_x: float, g_y: float, g_z: float):
                 weight *= w[offset[i]][i]
             g_v = F_grid_v[base + offset]
             new_v += weight * g_v
-            new_C += 4 * weight * g_v.outer_product(dpos) / dx**2
+            new_C += 4 * weight * g_v.outer_product(dpos) * inv_dx * inv_dx
         F_v[p] = new_v
         F_x[p] += dt * F_v[p]
         F_C[p] = new_C
@@ -331,7 +342,10 @@ def main():
 
         if not paused:
             for _ in range(steps):
-                substep(*GRAVITY)
+                substep_init_grid()
+                substep_p2g()
+                substep_grid(*GRAVITY)
+                substep_g2p()
 
         render()
         show_options()
